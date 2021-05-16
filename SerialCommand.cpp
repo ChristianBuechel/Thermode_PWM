@@ -140,5 +140,15 @@ void SerialCommand::clearBuffer() {
  * Returns NULL if no more tokens exist.
  */
 char *SerialCommand::next() {
-  return strtok_r(NULL, delim, &last);
+  return strtok_r(NULL, delim, &last);  
+}
+
+/**
+ * Print the list of commands.
+ */
+
+void SerialCommand::printCommands() {
+    for (int i = 0; i < commandCount; i++) {
+        Serial.println(commandList[i].command);
+    } 
 }
