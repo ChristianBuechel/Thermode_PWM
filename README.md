@@ -22,6 +22,7 @@ The commands that are available are:
 * EXECCTCPWM    - new way to execute cTC queue using precise PWM functionality
 * FLUSHCTC      - clear cTC queue
 * STATUSCTC     - check whether EXECCTC(PWM) is running"));
+* READVAS       - returns time in ms and the reading of ADC0;
 
 
 ## General Operation

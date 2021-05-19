@@ -51,9 +51,10 @@
 
 //#define UpPin PB6     //OC1B
 //#define DownPin PB5   //OC1A
+#define AnalogPin A0 //AO
 #define UpPin 12     //OC1B
 #define DownPin 11   //OC1A
-#define cTCMaxN 3001 // max entries for complex time-course (2000 + 1 zero)
+#define cTCMaxN 2501 // max entries for complex time-course (2000 + 1 zero)
 //given a max cTCBinMS of 500ms we can define cTC of 1000s
 //OC1A = GPIO port PB5 = Arduino Digital Pin D11 Mega2560 DOWN blue
 //OC1B = GPIO port PB6 = Arduino Digital Pin D12 Mega2560 UP green
@@ -99,6 +100,8 @@ SerialCommand sCmd; // The demo SerialCommand object
 void setup()
 {
   DebugMode = 1;
+  pinMode(AnalogPin, INPUT);
+  
   pinMode(UpPin, OUTPUT);
   digitalWrite(UpPin, LOW);
 
@@ -136,6 +139,7 @@ void setup()
   sCmd.addCommand("EXECCTCPWM", processEXECCTCPWM);
   sCmd.addCommand("FLUSHCTC", processFLUSHCTC);
   sCmd.addCommand("STATUSCTC", processSTATUSCTC);
+  sCmd.addCommand("READVAS", processREADVAS);
 
   sCmd.setDefaultHandler(unrecognized); // Handler for command that isn't matched  (says "What?")
 }
@@ -243,6 +247,7 @@ void processMOVE()
     else
     {
       Serial.println(F("Not executed: Make sure no pulse is active"));
+      Serial.println(TCNT1);
     }
   }
 }
@@ -533,6 +538,8 @@ ISR(TIMER1_OVF_vect)
     PORTB &= ~(1 << PB6); // set PB6 low
     cc = 0;
     inEXECCTCPWM = 0;
+    TCNT1 = 0; //does not help to do a MOVE after EXECCTCPWM...
+    TIMSK1 &= ~(1 << TOIE1); // can we disable interrupt when TCNT1 overflows in ISR ??? -> YES
   }
   cc++;
 }
@@ -563,6 +570,15 @@ void processSTATUSCTC()
 void unrecognized(const char *command)
 {
   LastCmd = "What?"; //could print the whole command
+}
+
+void processREADVAS()
+{
+  LastCmd = "START;";
+  Serial.print(millis());
+  Serial.print(F(" "));
+  Serial.println(analogRead(AnalogPin));
+  
 }
 
 //***********************************************************************************
@@ -615,7 +631,7 @@ void displayHelp()
   Serial.println(F("EXECCTCPWM    - new way to execute cTC queue using precise PWM functionality"));
   Serial.println(F("FLUSHCTC      - clear cTC queue"));
   Serial.println(F("STATUSCTC     - check whether EXECCTC(PWM) is running"));
-
+  Serial.println(F("READVAS       - returns time in ms and the reading of the VAS potentiometer 0..1023"));
 }
 
 //***********************************************************************************
