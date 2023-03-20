@@ -1,0 +1,21 @@
+Circuit: * C:\Users\buechel\Documents\Arduino\Thermode_PWM\Optocoupler_817.asc
+
+Direct Newton iteration for .op point succeeded.
+
+Date: Wed May 26 07:42:39 2021
+Total elapsed time: 0.070 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2762
+traniter = 2739
+tranpoints = 1315
+accept = 1260
+rejected = 55
+matrix size = 26
+fillins = 15
+solver = Normal
+Matrix Compiler1: 1.83 KB object code size  0.7/0.4/[0.2]
+Matrix Compiler2: 2.23 KB object code size  0.3/0.5/[0.2]
+

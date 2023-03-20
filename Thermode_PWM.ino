@@ -3,17 +3,23 @@
 //*********** defines
 //***********************************************************************************
 
+// thermode v 2.6 (2023-3-20)
 // thermode v 2.5 (2021-5-13)
 // original author: Christian Büchel
 // modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4), Christian Büchel (v2.5)
 #include "Arduino.h"
 #include "Thermode_PWM.h"
 #include "SerialCommand.h"
+#include "fastio.h"
+
+#define PB5 5 //pin 11 is this correct?
+#define PB6 6 //pin 12
 
 #define SCALE_FACTOR 1000 //all floats are multiplied by this internally
 #define A 1
 #define B 2
 #define DIGIHI 5 //H Pulse for x ms
+#define DIGIHI_US 1 //H Pulse for x ms
 
 #define SCK 16E6        // clock at 16 MHz
 #define PWMPRESCALER 64 // prescaler for PWM mode
@@ -63,6 +69,7 @@ const float SWversion = 2.5;
 const byte StartPin = 7;
 const byte LedPin = 13;
 const byte DigitimerPin = 6;
+#define DIGITIMER_PIN 6
 
 String LastCmd; //last cmd goes here
 
@@ -128,6 +135,7 @@ void setup()
   sCmd.addCommand("MOVE", processMOVE);
   sCmd.addCommand("START", processSTART);
   sCmd.addCommand("SHOCK", processSHOCK);
+  sCmd.addCommand("SHOCK_US", processSHOCK_US);
   sCmd.addCommand("GETTIME", processGETTIME);
   sCmd.addCommand("DEBUG", processDEBUG);
   sCmd.addCommand("HELP", processHELP);
@@ -261,6 +269,58 @@ void processSTART()
   delay(100);                   // wait
   digitalWrite(StartPin, LOW);  // port low
 }
+
+void processSHOCK_US()
+{
+  char *arg;
+  uint16_t New, n_stim, isi;
+  uint32_t StartTime, CurrentTime;
+  LastCmd = "SHOCK_US;";
+  arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
+  if (arg != NULL)   // As long as it existed, take it
+  {
+    LastCmd = LastCmd + arg;
+    New = atoi(arg);
+    n_stim = New;
+  }
+  arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
+  if (arg != NULL)
+  {
+    LastCmd = LastCmd + arg;
+    New = atoi(arg);
+    isi = New;
+    if (DebugMode > 0)
+    {
+      Serial.print(F("Giving "));
+      Serial.print(n_stim);
+      Serial.print(F(" pulses, every "));
+      Serial.print(isi);
+      Serial.println(F(" us"));
+
+      Serial.print(F("Elapsed time since start: "));
+      Serial.print(StartTime);
+      Serial.println(F(" us."));
+    }
+  }
+  digitalWrite(LedPin, HIGH); // LED ON
+  SET_OUTPUT(DIGITIMER_PIN);
+  //StartTime = micros();
+  //while (micros() - StartTime < dur_int)
+  //loop for n_stim times
+  for (int i = 0; i < n_stim; i++)
+  {
+    //digitalWrite(DigitimerPin, HIGH); //
+    WRITE(DIGITIMER_PIN, HIGH); //
+    //delayMicroseconds(DIGIHI_US);  // waits for us
+    _delay_us(DIGIHI_US);
+    //digitalWrite(DigitimerPin, LOW);  //
+    WRITE(DIGITIMER_PIN, LOW);  //
+    delayMicroseconds(isi - DIGIHI_US);
+    //_delay_us(isi - DIGIHI_US);
+  }
+  digitalWrite(LedPin, LOW); // LED OFF
+}
+
 
 void processSHOCK()
 {
@@ -621,6 +681,7 @@ void displayHelp()
   Serial.println(F("MOVE;XX       - Move temp up/down for XX us"));
   Serial.println(F("START         - Send 100ms TTL pulse to start program"));
   Serial.println(F("SHOCK;xx;yy   - Set Digitimer stimulus duration (xx) and interval between pulses (yy) in ms"));
+  Serial.println(F("SHOCK_US;nn;yy- Apply nn Digitimer stimuli (0.3µs) with an interval between pulses of yy µs"));
   Serial.println(F("GETTIME       - Get Arduino time in ms"));
   Serial.println(F("DEBUG;XX      - Set debug state (0: OFF)"));
   Serial.println(F("HELP          - This command"));
