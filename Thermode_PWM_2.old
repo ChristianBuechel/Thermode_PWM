@@ -2,16 +2,15 @@
 //***********************************************************************************
 //*********** defines
 //***********************************************************************************
-// thermode v 2.7 (2023-3-23)
+
 // thermode v 2.6 (2023-3-20)
 // thermode v 2.5 (2021-5-13)
 // original author: Christian Büchel
-// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4), Christian Büchel (v2.5)
+// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4), Christian Büchel (v2.5-v2.6)
 #include "Arduino.h"
 #include "Thermode_PWM.h"
 #include "SerialCommand.h"
 #include "fastio.h"
-#include "avr/io.h"
 
 #define PB5 5 //pin 11 is this correct?
 #define PB6 6 //pin 12
@@ -19,6 +18,7 @@
 #define SCALE_FACTOR 1000 //all floats are multiplied by this internally
 #define A 1
 #define B 2
+//#define DIGIHI 1 //H Pulse for x ms
 #define DIGIHI_US 5 //H Pulse for x ms
 
 #define SCK 16E6        // clock at 16 MHz
@@ -65,7 +65,7 @@
 //OC1A = GPIO port PB5 = Arduino Digital Pin D11 Mega2560 DOWN blue
 //OC1B = GPIO port PB6 = Arduino Digital Pin D12 Mega2560 UP green
 
-const float SWversion = 2.7;
+const float SWversion = 2.6;
 const byte StartPin = 7;
 const byte LedPin = 13;
 const byte DigitimerPin = 6;
@@ -118,8 +118,12 @@ void setup()
   pinMode(StartPin, OUTPUT);
   digitalWrite(StartPin, LOW);
 
+  //pinMode(DigitimerPin, OUTPUT);
+  //digitalWrite(DigitimerPin, LOW);
+
   SET_OUTPUT(DIGITIMER_PIN);
   WRITE(DIGITIMER_PIN, LOW);  //
+
   pinMode(LedPin, OUTPUT);
   digitalWrite(LedPin, LOW);
 
@@ -302,6 +306,7 @@ void processSHOCK_US()
     }
   }
   digitalWrite(LedPin, HIGH); // LED ON
+  
   //StartTime = micros();
   //while (micros() - StartTime < dur_int)
   //loop for n_stim times
