@@ -27,6 +27,8 @@
   C(ERR_SHOCK_ISI)       \
   C(ERR_MOVE_RANGE)      \
   C(ERR_MOVE_BUSY)       \
+  C(ERR_START_BUSY)      \
+  C(ERR_SHOCK_BUSY)      \
   C(ERR_BUSY)            \
   C(ERR_DEBUG_RANGE)
 
@@ -92,8 +94,7 @@ const char *ok_str[] = {OK_CODES};
 #define SCK 16E6        // clock at 16 MHz
 #define PWMPRESCALER 64 // prescaler for PWM mode
 
-// #define MAX_TIME 4194240 // this is the longest in us the timer can do precisely
-#define MAX_TIME 1000 // debug
+#define MAX_TIME 4194240 // this is the longest in us the timer can do precisely then we switch to ms
 
 // For prescaler = 8, 64, 256, 1024 use OSP_SET_AND_FIRE_LONG(cycles) instead. The "wait" time-waster makes it work!
 // #define wait {delayMicroseconds(2);} // Un-comment this for prescaler = 8
@@ -233,33 +234,34 @@ void processMOVE()
   char *arg;
   int32_t us;
   last_cmd = "MOVE;";
+
+  if ((busy) | (OSP_INPROGRESS()))
+  {
+    print_error(ERR_MOVE_BUSY);
+    return;
+  }
+
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)   // As long as it exists, take it
   {
     last_cmd = last_cmd + arg;
-    if (!OSP_INPROGRESS())
+
+    us = atol(arg);
+    if (abs(us) < MAX_TIME)
     {
-      us = atol(arg);
-      if (abs(us) < MAX_TIME)
-      {
-        print_ok(OK_MOVE_PREC);
-        ramp_temp_prec(us); // Better to pass over us and then decide in ramp which prescaler to use
-      }
-      else
-      {
-        if (debug_mode > 0)
-        {
-          Serial.print(F("Pulse time longer than "));
-          Serial.println(MAX_TIME);
-          Serial.println(F("using ramp_temp"));
-        }
-        print_ok(OK_MOVE_SLOW);
-        ramp_temp(us / 1000);
-      }
+      print_ok(OK_MOVE_PREC);
+      ramp_temp_prec(us); // Better to pass over us and then decide in ramp which prescaler to use
     }
     else
     {
-      print_error(ERR_MOVE_BUSY);
+      if (debug_mode > 0)
+      {
+        Serial.print(F("Pulse time longer than "));
+        Serial.println(MAX_TIME);
+        Serial.println(F("using ramp_temp"));
+      }
+      print_ok(OK_MOVE_SLOW);
+      ramp_temp(us / 1000);
     }
   }
 }
@@ -267,6 +269,11 @@ void processMOVE()
 void processSTART()
 {
   last_cmd = "START;";
+  if ((busy) | (OSP_INPROGRESS()))
+  {
+    print_error(ERR_START_BUSY);
+    return;
+  }
   print_ok(OK);
   OUT_WRITE(START_PIN, HIGH); //
   delay(100);                 // wait
@@ -279,6 +286,12 @@ void processSHOCK()
   uint16_t New, n_stim, isi;
   uint32_t StartTime, CurrentTime;
   last_cmd = "SHOCK;";
+    if ((busy) | (OSP_INPROGRESS()))
+  {
+    print_error(ERR_SHOCK_BUSY);
+    return;
+  }
+
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)   // As long as it existed, take it
   {
@@ -375,6 +388,11 @@ void processINITCTC()
   char *arg;
   uint16_t tmp;
   last_cmd = "INITCTC;";
+  if ((busy) | (OSP_INPROGRESS()))
+  {
+    print_error(ERR_BUSY);
+    return;
+  }
 
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)   // As long as it existed, take it
@@ -402,6 +420,11 @@ void processLOADCTC()
   int16_t move_ms, t_move_ms;
 
   last_cmd = "LOADCTC;";
+  if ((busy) | (OSP_INPROGRESS()))
+  {
+    print_error(ERR_BUSY);
+    return;
+  }
 
   if (ctc_bin_ms == 0) // not initialized
   {
@@ -442,8 +465,7 @@ void processQUERYCTC()
   char *arg;
   uint8_t query_lvl;
   last_cmd = "QUERYCTC;";
-
-  if (busy)
+  if ((busy) | (OSP_INPROGRESS()))
   {
     print_error(ERR_BUSY);
     return;
@@ -784,6 +806,9 @@ void ramp_temp(int32_t ms)
   }
   cli();
   count_down_ms = ms;
+  TCCR1A = 0;
+  TCCR1B = 0;
+
   TCCR4A = 0;
   TCCR4B = 0;
   TCCR4B |= (1 << WGM42);
@@ -795,7 +820,7 @@ void ramp_temp(int32_t ms)
   // TIMSK4
   // Set Timer Interrupt Mask Register to
   // Clear Timer on Compare channel A for timer 4
-  TIFR4 |= (1 << OCF4A);  // very important otherwise ISR will immediately be executed
+  TIFR4 |= (1 << OCF4A); // very important otherwise ISR will immediately be executed
   TIMSK4 |= (1 << OCIE4A);
   busy = true;
   if (ms < 0)
@@ -818,7 +843,7 @@ void ramp_temp(int32_t ms)
     OUT_WRITE(LED_PIN, HIGH); //
     OUT_WRITE(UP_PIN, HIGH);  //
   }
-  TCCR4B |= (1 << CS41) | (1 << CS40); //start clock
+  TCCR4B |= (1 << CS41) | (1 << CS40); // start clock
   sei();
 }
 
@@ -888,48 +913,41 @@ void ramp_temp_prec(int32_t o_us) // specifiy in us
   // Serial.print(F("ramp_temp_prec: "));
   // Serial.print(o_us);
   // Serial.println(F("us"));
-  if (!OSP_INPROGRESS())
+
+  if (abs(o_us) < 1048560) // we can use 256 as a prescaler
   {
-
-    if (abs(o_us) < 1048560) // we can use 256 as a prescaler
-    {
-      prescaler = 256; // we get up to ~4 s pulses
-    }
-    else
-    {
-      prescaler = 1024;
-    }
-
-    cps = SCK / prescaler; // tics per second
-    // now convert us into tics
-    o_tic = (int64_t)o_us * cps / 1000000; // convert from us to tics
-
-    if (o_tic < 0)
-    {
-      o_tic = abs(o_tic);
-
-      if (debug_mode > 0)
-      {
-        Serial.print(F("Precision-ramping down:  "));
-        Serial.println(o_tic);
-      }
-      osp_setup(A, prescaler);
-      OSP_SET_AND_FIRE_LONG_A(o_tic) // Use this for prescaler > 1!
-    }
-    else if (o_tic > 0)
-    {
-      if (debug_mode > 0)
-      {
-        Serial.print(F("Precision-ramping up:  "));
-        Serial.println(o_tic);
-      }
-      osp_setup(B, prescaler);
-      OSP_SET_AND_FIRE_LONG_B(o_tic) // Use this for prescaler > 1!
-    }
+    prescaler = 256; // we get up to ~4 s pulses
   }
-  else // Already active pulse
+  else
   {
-    Serial.println(F("Not executed: Make sure no pulse is active"));
+    prescaler = 1024;
+  }
+
+  cps = SCK / prescaler; // tics per second
+  // now convert us into tics
+  o_tic = (int64_t)o_us * cps / 1000000; // convert from us to tics
+
+  if (o_tic < 0)
+  {
+    o_tic = abs(o_tic);
+
+    if (debug_mode > 0)
+    {
+      Serial.print(F("Precision-ramping down:  "));
+      Serial.println(o_tic);
+    }
+    osp_setup(A, prescaler);
+    OSP_SET_AND_FIRE_LONG_A(o_tic) // Use this for prescaler > 1!
+  }
+  else if (o_tic > 0)
+  {
+    if (debug_mode > 0)
+    {
+      Serial.print(F("Precision-ramping up:  "));
+      Serial.println(o_tic);
+    }
+    osp_setup(B, prescaler);
+    OSP_SET_AND_FIRE_LONG_B(o_tic) // Use this for prescaler > 1!
   }
 }
 
