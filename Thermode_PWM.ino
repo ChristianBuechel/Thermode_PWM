@@ -2,39 +2,108 @@
 //***********************************************************************************
 //*********** defines
 //***********************************************************************************
-// thermode v 2.7 (2023-3-23)
+// thermode v 3.0 (2023-4-16)
+// thermode v 2.8 (2023-4-12)
+
 // thermode v 2.6 (2023-3-20)
 // thermode v 2.5 (2021-5-13)
 // original author: Christian Büchel
-// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4), Christian Büchel (v2.5)
+// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4), Christian Büchel (v2.5-v3.0)
+
 #include "Arduino.h"
 #include "Thermode_PWM.h"
 #include "SerialCommand.h"
 #include "fastio.h"
-#include "avr/io.h"
 
-#define PB5 5 //pin 11 is this correct?
-#define PB6 6 //pin 12
+// use C preproc to generae enums and char arrays with the same content
+#define ERROR_CODES      \
+  C(ERR_NULL)            \
+  C(ERR_CTC_BIN_WIDTH)   \
+  C(ERR_CTC_PULSE_WIDTH) \
+  C(ERR_CTC_NOT_INIT)    \
+  C(ERR_CTC_FULL)        \
+  C(ERR_CTC_EMPTY)       \
+  C(ERR_SHOCK_RANGE)     \
+  C(ERR_SHOCK_ISI)       \
+  C(ERR_MOVE_RANGE)      \
+  C(ERR_MOVE_BUSY)       \
+  C(ERR_BUSY)            \
+  C(ERR_DEBUG_RANGE)
 
-#define SCALE_FACTOR 1000 //all floats are multiplied by this internally
-#define A 1
-#define B 2
-#define DIGIHI_US 5 //H Pulse for x ms
+#define C(x) x,
+enum error_codes
+{
+  ERROR_CODES N_ERROR_CODES
+}; // N_ERROR_CODES gets the number of elements in enum
+#undef C
+#define C(x) #x,
+const char *error_str[] = {ERROR_CODES};
+#undef C
+
+// define error codes
+#define OK_CODES  \
+  C(OK)           \
+  C(OK_READY)     \
+  C(OK_INITCTC)   \
+  C(OK_LOADCTC)   \
+  C(OK_MOVE_SLOW) \
+  C(OK_MOVE_PREC) \
+  C(OK_FLUSHCTC)
+
+#define C(x) x,
+enum ok_codes
+{
+  OK_CODES N_OK_CODES
+}; // N_OK_CODES gets the number of elements in enum
+#undef C
+#define C(x) #x,
+const char *ok_str[] = {OK_CODES};
+#undef C
+
+#define A 1 //
+#define B 2 //
+
+// TIMER1
+//  OC1A = GPIO port PB5 = Arduino Digital Pin D11 Mega2560 --> DOWN blue
+//  OC1B = GPIO port PB6 = Arduino Digital Pin D12 Mega2560 --> UP green
+#define PB5 5 // pin 11
+#define PB6 6 // pin 12
+
+// TIMER3
+// OC3A = GPIO port PE3 = Arduino	Digital pin D5 Mega2560  --> PWM shock
+#define PE3 3 // pin 5 --> SHOCK
+
+// no comments after the following #defines are allowed due to macro def
+#define ANALOG_PIN 14
+#define UP_PIN 12
+#define DOWN_PIN 11
+#define START_PIN 7
+#define LED_PIN 13
+
+#define CTC_MAX_N 2500
+// max entries for complex time-course (2500 + 1 zero)
+// given a max ctc_bin_ms of 500ms we can define ctc_data of 1000s
+
+#define DIGIHI_US 100         // pulse dur in  µs
+#define DEFAULT_DIGI_ISI 1000 // in us
+#define MAX_DIGI_STIM 2000    //
+#define MAX_DIGI_ISI 10000    // in us
 
 #define SCK 16E6        // clock at 16 MHz
 #define PWMPRESCALER 64 // prescaler for PWM mode
 
-#define MAX_TIME 4194240 //this is the longest in us the timer can do precisely
+#define MAX_TIME 4194240 // this is the longest in us the timer can do precisely
 
 // For prescaler = 8, 64, 256, 1024 use OSP_SET_AND_FIRE_LONG(cycles) instead. The "wait" time-waster makes it work!
-//#define wait {delayMicroseconds(2);} // Un-comment this for prescaler = 8
-//#define wait {delayMicroseconds(5);} // ...for prescaler = 64, make sure we get at least one clock
-//#define wait {delayMicroseconds(17);} // ...for prescaler = 256
+// #define wait {delayMicroseconds(2);} // Un-comment this for prescaler = 8
+// #define wait {delayMicroseconds(5);} // ...for prescaler = 64, make sure we get at least one clock
+// #define wait {delayMicroseconds(17);} // ...for prescaler = 256
 
-#define wait               \
-  {                        \
-    delayMicroseconds(65); \
+#define wait       \
+  {                \
+    _delay_us(65); \
   } // ...for prescaler = 1024
+
 #define OSP_SET_AND_FIRE_LONG_A(cycles) \
   {                                     \
     uint16_t m = 0xffff - (cycles - 1); \
@@ -55,49 +124,25 @@
 //*********** initialize global variables
 //***********************************************************************************
 
-//#define UpPin PB6     //OC1B
-//#define DownPin PB5   //OC1A
-#define AnalogPin A0 //AO
-#define UpPin 12     //OC1B
-#define DownPin 11   //OC1A
-#define cTCMaxN 2501 // max entries for complex time-course (2000 + 1 zero)
-//given a max cTCBinMS of 500ms we can define cTC of 1000s
-//OC1A = GPIO port PB5 = Arduino Digital Pin D11 Mega2560 DOWN blue
-//OC1B = GPIO port PB6 = Arduino Digital Pin D12 Mega2560 UP green
+const float SWversion = 3.0;
 
-const float SWversion = 2.7;
-const byte StartPin = 7;
-const byte LedPin = 13;
-const byte DigitimerPin = 6;
-#define DIGITIMER_PIN 6
-
-String LastCmd; //last cmd goes here
+String last_cmd; // last cmd goes here
 
 int32_t cps, prescaler;
-uint8_t DebugMode;
+uint8_t debug_mode;
 
-// complex time course (CTC) global variables (initCTC/loadCTC/queryCTC/execCTC/flushCTC)
-bool cTCStatus = 0; // start out not ready
-String cTCStatusStr = "not initialized";
-bool cTCBreak = 0;  // start out ready to accept LOADCTC
-bool inEXECCTC = 0; // flags to indicate what is happening
-bool inEXECCTCPWM = 0;
+uint16_t ctc_bin_ms; // 0 to 500
+volatile int32_t ctc_bin_ticks;
+volatile int16_t ctc_data[CTC_MAX_N + 1]; // we have to add a zero pulse at the end
+volatile uint16_t n_ctc, c_ctc;
 
-uint16_t cTCBinMS; // 0 to 500
-volatile int32_t cTCBinTicks;
-volatile int16_t cTC[cTCMaxN]; // -32768 to 32767
-volatile uint16_t cTCPos = 0;
-volatile uint16_t cc = 0; //counter
+volatile bool busy;
+
+volatile uint16_t n_pulse, c_pulse;
 int16_t pulse_ms0;
 int32_t pulse_tick0;
 
-bool cTCExec = 0;
-uint16_t cTCExecCtr = 0;
-uint32_t lastCTCTime = 0; // timestamp of the last CTC
-uint32_t currentTime = 0;
-
-//complex variables
-//
+// complex variables
 SerialCommand sCmd; // The demo SerialCommand object
 
 //***********************************************************************************
@@ -106,27 +151,19 @@ SerialCommand sCmd; // The demo SerialCommand object
 
 void setup()
 {
-  DebugMode = 1;
-  pinMode(AnalogPin, INPUT);
-  
-  pinMode(UpPin, OUTPUT);
-  digitalWrite(UpPin, LOW);
-
-  pinMode(DownPin, OUTPUT);
-  digitalWrite(DownPin, LOW);
-
-  pinMode(StartPin, OUTPUT);
-  digitalWrite(StartPin, LOW);
-
-  SET_OUTPUT(DIGITIMER_PIN);
-  WRITE(DIGITIMER_PIN, LOW);  //
-  pinMode(LedPin, OUTPUT);
-  digitalWrite(LedPin, LOW);
+  busy = false;
+  debug_mode = 0;
+  SET_INPUT(ANALOG_PIN);
+  OUT_WRITE(UP_PIN, LOW);    //
+  OUT_WRITE(DOWN_PIN, LOW);  //
+  OUT_WRITE(START_PIN, LOW); //
+  OUT_WRITE(LED_PIN, LOW);   //
 
   TCCR1B = 0; // Halt counter by setting clock select bits to 0 (No clock source).
+  TCCR1A = 0; // Halt counter by setting clock select bits to 0 (No clock source).
   // This keeps anything from happening while we get set up
 
-  TCNT1 = 0x0000; // Start counting at bottom.
+  TCNT1 = 0x0000; // set counter to zero
 
   Serial.begin(115200);
 
@@ -134,18 +171,15 @@ void setup()
   sCmd.addCommand("MOVE", processMOVE);
   sCmd.addCommand("START", processSTART);
   sCmd.addCommand("SHOCK", processSHOCK);
-  sCmd.addCommand("SHOCK_US", processSHOCK_US);
   sCmd.addCommand("GETTIME", processGETTIME);
   sCmd.addCommand("DEBUG", processDEBUG);
   sCmd.addCommand("HELP", processHELP);
   sCmd.addCommand("INITCTC", processINITCTC);
   sCmd.addCommand("LOADCTC", processLOADCTC);
   sCmd.addCommand("QUERYCTC", processQUERYCTC);
-  //sCmd.addCommand("STATCTC",  processSTATCTC);
   sCmd.addCommand("EXECCTC", processEXECCTC);
-  sCmd.addCommand("EXECCTCPWM", processEXECCTCPWM);
   sCmd.addCommand("FLUSHCTC", processFLUSHCTC);
-  sCmd.addCommand("STATUSCTC", processSTATUSCTC);
+  sCmd.addCommand("STATUS", processSTATUS);
   sCmd.addCommand("READVAS", processREADVAS);
 
   sCmd.setDefaultHandler(unrecognized); // Handler for command that isn't matched  (says "What?")
@@ -157,44 +191,7 @@ void setup()
 
 void loop()
 {
-  sCmd.readSerial(); //  parse
-  //currentTime = millis();
-  if (cTCExec == 1 && millis() - lastCTCTime > cTCBinMS)
-  {
-    lastCTCTime = millis();
-
-    int16_t ms;
-    int32_t o_us;
-
-    ms = cTC[cTCExecCtr++];
-    o_us = (int32_t)ms * 1000;
-
-    //Serial.print(ms);
-    //Serial.print(F("ms == "));
-    //Serial.print(o_us);
-    //Serial.print(F("us"));
-
-    if (abs(o_us) < MAX_TIME)
-    {
-      //Serial.print(F(", will use ramp_temp_prec(o_us) at currentTime "));
-      //Serial.println(currentTime);
-      ramp_temp_prec(o_us); //Better to pass over us and then decide in ramp which prescaler to use
-    }
-    else
-    {
-      //Serial.print(F(", will use ramp_temp(ms) at currentTime "));
-      //Serial.println(currentTime);
-      ramp_temp(ms);
-    }
-
-    if (cTCExecCtr == cTCPos) // then we've reached the end of the line; cTCPos is incremented so minus 1
-    {
-      cTCExec = 0;
-      cTCExecCtr = 0;
-      lastCTCTime = 0;
-      inEXECCTC = 0;
-    }
-  }
+  sCmd.readSerial(); //  parse commands
 }
 
 //***********************************************************************************
@@ -212,15 +209,19 @@ void processDIAG()
 void processDEBUG()
 {
   char *arg;
-  LastCmd = "DEBUG;";
+  last_cmd = "DEBUG;";
   uint8_t New;
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)   // if there is more, take it
   {
     New = atoi(arg);
-    DebugMode = check_range_def(New, (byte)0, (byte)4, (byte)1);
-    Serial.print(F("DebugMode = "));
-    Serial.println(DebugMode);
+    if (check_range(&debug_mode, New, (uint8_t)0, (uint8_t)1))
+      print_ok(OK);
+    else
+    {
+      print_error(ERR_DEBUG_RANGE);
+      return;
+    }
   }
 }
 
@@ -228,188 +229,166 @@ void processMOVE()
 {
   char *arg;
   int32_t us;
-  LastCmd = "MOVE;";
+  last_cmd = "MOVE;";
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
-  if (arg != NULL)   // As long as it existed, take it
+  if (arg != NULL)   // As long as it exists, take it
   {
-    LastCmd = LastCmd + arg;
+    last_cmd = last_cmd + arg;
     if (!OSP_INPROGRESS())
     {
       us = atol(arg);
       if (abs(us) < MAX_TIME)
       {
-        ramp_temp_prec(us); //Better to pass over us and then decide in ramp which prescaler to use
+        print_ok(OK_MOVE_PREC);
+        ramp_temp_prec(us); // Better to pass over us and then decide in ramp which prescaler to use
       }
       else
       {
-        if (DebugMode > 0)
+        if (debug_mode > 0)
         {
           Serial.print(F("Pulse time longer than "));
           Serial.println(MAX_TIME);
           Serial.println(F("using ramp_temp"));
         }
+        print_ok(OK_MOVE_SLOW);
         ramp_temp(us / 1000);
       }
     }
     else
     {
-      Serial.println(F("Not executed: Make sure no pulse is active"));
-      Serial.println(TCNT1);
+      print_error(ERR_MOVE_BUSY);
     }
   }
 }
 
 void processSTART()
 {
-  LastCmd = "START;";
-  Serial.print(F("START "));
-  pinMode(StartPin, OUTPUT);
-  digitalWrite(StartPin, HIGH); // port high
-  delay(100);                   // wait
-  digitalWrite(StartPin, LOW);  // port low
+  last_cmd = "START;";
+  print_ok(OK);
+  OUT_WRITE(START_PIN, HIGH); //
+  delay(100);                 // wait
+  OUT_WRITE(START_PIN, LOW);  //
 }
-
-void processSHOCK_US()
-{
-  char *arg;
-  uint16_t New, n_stim, isi;
-  uint32_t StartTime, CurrentTime;
-  LastCmd = "SHOCK_US;";
-  arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
-  if (arg != NULL)   // As long as it existed, take it
-  {
-    LastCmd = LastCmd + arg;
-    New = atoi(arg);
-    n_stim = New;
-  }
-  arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
-  if (arg != NULL)
-  {
-    LastCmd = LastCmd + arg;
-    New = atoi(arg);
-    isi = New;
-    if (DebugMode > 0)
-    {
-      Serial.print(F("Giving "));
-      Serial.print(n_stim);
-      Serial.print(F(" pulses, every "));
-      Serial.print(isi);
-      Serial.println(F(" us"));
-
-      Serial.print(F("Elapsed time since start: "));
-      Serial.print(StartTime);
-      Serial.println(F(" us."));
-    }
-  }
-  digitalWrite(LedPin, HIGH); // LED ON
-  //StartTime = micros();
-  //while (micros() - StartTime < dur_int)
-  //loop for n_stim times
-  for (int i = 0; i < n_stim; i++)
-  {
-    //digitalWrite(DigitimerPin, HIGH); //
-    WRITE(DIGITIMER_PIN, HIGH); //
-    //delayMicroseconds(DIGIHI_US);  // waits for us
-    _delay_us(DIGIHI_US);
-    //digitalWrite(DigitimerPin, LOW);  //
-    WRITE(DIGITIMER_PIN, LOW);  //
-    delayMicroseconds(isi - DIGIHI_US);
-    //_delay_us(isi - DIGIHI_US);
-  }
-  digitalWrite(LedPin, LOW); // LED OFF
-}
-
 
 void processSHOCK()
 {
   char *arg;
-  uint16_t New, dur_int, isi;
+  uint16_t New, n_stim, isi;
   uint32_t StartTime, CurrentTime;
-  LastCmd = "SHOCK;";
+  last_cmd = "SHOCK;";
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)   // As long as it existed, take it
   {
-    LastCmd = LastCmd + arg;
+    last_cmd = last_cmd + arg;
     New = atoi(arg);
-    dur_int = New;
+
+    if (check_range(&n_stim, New, (uint16_t)0, (uint16_t)MAX_DIGI_STIM))
+      print_ok(OK);
+    else
+    {
+      print_error(ERR_SHOCK_RANGE);
+      return;
+    }
+
+    n_pulse = n_stim;
   }
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)
   {
-    LastCmd = LastCmd + arg;
+    last_cmd = last_cmd + arg;
     New = atoi(arg);
-    isi = New;
-    if (DebugMode > 0)
+    if (check_range(&isi, New, (uint16_t)DEFAULT_DIGI_ISI, (uint16_t)MAX_DIGI_ISI))
+      print_ok(OK);
+    else
     {
-      Serial.print(F("Stimulating for "));
-      Serial.print(dur_int);
-      Serial.print(F(" ms, every "));
-      Serial.print(isi);
-      Serial.println(F(" ms"));
-
-      Serial.print(F("Elapsed time since start: "));
-      Serial.print(StartTime);
-      Serial.println(F(" ms."));
+      print_error(ERR_SHOCK_ISI);
+      return;
     }
   }
-  digitalWrite(LedPin, HIGH); // LED ON
-  StartTime = millis();
-  while (millis() - StartTime < dur_int)
+  else
   {
-    //digitalWrite(DigitimerPin, HIGH); //
-    WRITE(DIGITIMER_PIN, HIGH); //
-    //delay(DIGIHI);                    // waits for ms
-    _delay_us(DIGIHI_US);
-    //digitalWrite(DigitimerPin, LOW);  //
-    WRITE(DIGITIMER_PIN, LOW); //
-    delay(isi); // minor inaccuracy
+    isi = DEFAULT_DIGI_ISI;
   }
-  digitalWrite(LedPin, LOW); // LED OFF
+
+  if (debug_mode > 0)
+  {
+    Serial.print(F("Using PWM Timer3 giving "));
+    Serial.print(n_stim);
+    Serial.print(F(" pulses, every "));
+    Serial.print(isi);
+    Serial.println(F(" us"));
+
+    Serial.print(F("Elapsed time since start: "));
+    Serial.print(StartTime);
+    Serial.println(F(" us."));
+  }
+
+  if ((busy) | (OSP_INPROGRESS()))
+  {
+    print_error(ERR_BUSY);
+    return;
+  }
+  // now prepare Timer3 for PWM
+  cli();              // stop interrupts
+  DDRE |= (1 << PE3); // all outputs go
+
+  TCCR3B = 0;           // same for TCCR3B
+  TIFR3 |= (1 << TOV3); // very important as this is still set from EXECCTC (clear Timer/Counter1 Overflow Flag)
+
+  TIMSK3 = (1 << TOIE3); // interrupt when TCNT3 overflows
+
+  TCCR3A = (1 << COM3A1) + (1 << COM3B1) + (1 << WGM31);
+  TCCR3B = (1 << WGM33); // normal mode, phase correct PWM ... don't start yet!
+
+  ICR3 = isi / 8; // ticks
+
+  OCR3A = 12; // pulsewidth 8us * 12 = 96us
+
+  TCNT3 = ICR3 - 1; // initialize counter value
+  // TCNT3 = 0xFFFF; // initialize counter value
+  busy = true;
+  c_pulse = 0;                         // reset pulse counter
+  TCCR3B |= (1 << CS30) | (1 << CS31); // Now start timer with prescaler 64 (res 8us, max dur = 0xFFFF x 8 = 524ms)
+
+  sei(); // enable global interrupts
 }
 
 void processGETTIME()
 {
-  LastCmd = "START;";
+  last_cmd = "GETTIME;";
   Serial.println(millis());
 }
 
 void processHELP()
 {
   char *arg;
-  LastCmd = "HELP;";
-  displayHelp();
+  last_cmd = "HELP;";
+  display_help();
+  display_error_codes();
 }
 
 void processINITCTC()
 {
   char *arg;
   uint16_t tmp;
-  LastCmd = "INITCTC;";
+  last_cmd = "INITCTC;";
 
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)   // As long as it existed, take it
   {
-    LastCmd = LastCmd + arg;
+    last_cmd = last_cmd + arg;
 
-    resetCTC(); // ALWAYS reset all cTC vars (including flushing the loaded cTC itself) when initializing
-
-    // therefore we don't need the cTCBreak
-    //if (cTCBreak==1)
-    //{
-    //    return;
-    //}
+    resetCTC(); // ALWAYS reset all ctc_data vars (including flushing the loaded ctc_data itself) when initializing
 
     tmp = atoi(arg);
-    if (tmp <= 500 && tmp > 0)
-    {
-      cTCBinMS = tmp;
-      cTCStatus = 0;
-      cTCStatusStr = "initialized";
-    }
+
+    if (check_range(&ctc_bin_ms, tmp, (uint16_t)1, (uint16_t)500))
+      print_ok(OK_INITCTC);
     else
     {
-      cTCStatus = 0;
-      cTCStatusStr = "INITCTC binSize is too large (>500ms).";
+      resetCTC();
+      print_error(ERR_CTC_BIN_WIDTH);
+      return;
     }
   }
 }
@@ -417,140 +396,124 @@ void processINITCTC()
 void processLOADCTC()
 {
   char *arg;
-  int16_t moveMs;
+  int16_t move_ms, t_move_ms;
 
-  LastCmd = "LOADCTC;";
+  last_cmd = "LOADCTC;";
 
+  if (ctc_bin_ms == 0) // not initialized
+  {
+    print_error(ERR_CTC_NOT_INIT);
+    resetCTC();
+    return;
+  }
+
+  if (n_ctc == CTC_MAX_N) // full
+  {
+    print_error(ERR_CTC_FULL);
+    resetCTC();
+    return;
+  }
   // get segment duration
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)   // As long as it existed, take it
   {
-    LastCmd = LastCmd + arg;
-
-    if (cTCBreak == 1)
+    last_cmd = last_cmd + arg;
+    move_ms = atoi(arg);
+    if (check_range_abs(&t_move_ms, move_ms, (int16_t)1, (int16_t)ctc_bin_ms))
     {
-      return;
-    }
-
-    if (cTCPos + 1 > cTCMaxN - 1)
-    {
-      cTCStatus = 0;
-      cTCStatusStr = "cTC too long, maximum is " + String(cTCMaxN - 1) + " data points.";
+      ctc_data[n_ctc] = t_move_ms;
+      n_ctc++; // increment pulse counter CAVE, this is the number of pulses, not the index of the last pulse
+      print_ok(OK_LOADCTC);
     }
     else
     {
-      moveMs = atoi(arg);
-      if (abs(moveMs) > cTCBinMS)
-      {
-        cTCBreak = 1; // break flag == 1 means this is the last status update until we perform FLUSHCTC
-        cTCStatus = 0;
-        cTCStatusStr = "cTC counter position " + String(cTCPos + 1) + " larger than maximum binSize (" + String(cTCBinMS) + "ms). Breaking further LOADCTCs. FLUSHCTC required to reset break flag, then try again.";
-      }
-      else
-      {
-        cTC[cTCPos++] = moveMs;
-        cTCStatus = 1;
-        cTCStatusStr = "ready";
-      }
+      resetCTC();
+      print_error(ERR_CTC_PULSE_WIDTH);
+      return;
     }
   }
-  // else return with error msg
 }
 
 void processQUERYCTC()
 {
   char *arg;
-  uint8_t queryLvl;
-  uint16_t p;
-  LastCmd = "QUERYCTC;";
+  uint8_t query_lvl;
+  last_cmd = "QUERYCTC;";
 
+  if (busy)
+  {
+    print_error(ERR_BUSY);
+    return;
+  }
   arg = sCmd.next(); // Get the next argument from the SerialCommand object buffer
   if (arg != NULL)
+    query_lvl = atoi(arg);
+  else
+    query_lvl = 0;
+
+  Serial.print(F("ctc_bin_ms: "));
+  Serial.println(ctc_bin_ms);
+  Serial.print(F("n_ctc: "));
+  Serial.println(n_ctc);
+
+  if ((query_lvl > 0) & (n_ctc > 0)) // if required, also return more detailed info
   {
-    queryLvl = atoi(arg);
-
-    if (queryLvl > 0) // always return the status
+    Serial.println(F("ctc_data: "));
+    for (uint16_t p = 0; p < n_ctc; p++)
     {
-      Serial.print(F("+++"));
-      Serial.print(F("Status: "));
-      Serial.print(cTCStatus);
-      Serial.print(F(" ("));
-      Serial.print(cTCStatusStr);
-      Serial.println(F(")"));
-
-      if (queryLvl == 2) // if required, also return more detailed info
-      {
-        Serial.print(F("+++"));
-        Serial.print(F(" cTCBinMs: "));
-        Serial.println(cTCBinMS);
-        Serial.print(F("+++"));
-        Serial.print(F(" cTCPos: "));
-        Serial.println(cTCPos);
-        Serial.print(F("+++"));
-        Serial.print(F(" cTCExec: "));
-        Serial.println(cTCExec);
-        Serial.print(F("+++"));
-        Serial.println(F(" cTC:"));
-        for (p = 0; p < cTCPos; p++)
-        {
-          Serial.print(p);
-          Serial.print(F(" "));
-          Serial.println(cTC[p]);
-        }
-      }
-      Serial.println(F("+++"));
+      Serial.print(p);
+      Serial.print(F(" "));
+      Serial.println(ctc_data[p]);
     }
   }
 }
 
 void processEXECCTC()
 {
-  LastCmd = "EXECCTC;";
+  last_cmd = "EXECCTC;";
 
-  if (cTCStatus == 0 | inEXECCTCPWM | inEXECCTC)
+  if ((busy) | (OSP_INPROGRESS()))
   {
-    if (DebugMode > 0)
-      Serial.println(F("EXECCTC not ready"));
-    return; // then we're just not ready...
+    print_error(ERR_BUSY);
+    return;
   }
-  TCCR1A = 0; //clear all Timer/PWM functionality
-  TCCR1B = 0;
-  TCNT1 = 0x0000;          // Start counting at bottom.
-  TIMSK1 &= ~(1 << TOIE1); // disable interrupt when TCNT1 overflows
-  cTCExec = 1;             // set flag to 1 so the main loop will start working
-  inEXECCTC = 1;           // say we are working
-}
 
-void processEXECCTCPWM()
-{
-  LastCmd = "EXECCTCPWM;";
-
-  if (cTCStatus == 0 | inEXECCTCPWM | inEXECCTC)
+  if (ctc_bin_ms == 0) // not initialized
   {
-    if (DebugMode > 0)
-      Serial.println(F("EXECCTCPWM not ready"));
-    return; // then we're just not ready...
+    print_error(ERR_CTC_NOT_INIT);
+    resetCTC();
+    return;
   }
-  inEXECCTCPWM = 1;
-  cc = 0;
+
+  if (n_ctc == 0) // no data
+  {
+    print_error(ERR_CTC_EMPTY);
+    resetCTC();
+    return;
+  }
+
+  c_ctc = 0;           // first entry
+  ctc_data[n_ctc] = 0; // add a zero pulse to the end to circumvent cut-off in ISR
+  n_ctc++;             // increment pulse counter
+
   cli();
   DDRB |= (1 << PB5) | (1 << PB6); // all outputs go
 
   TCCR1B = 0;            // Stop timer before configuring
-  TIFR1 |= (1 << TOV1);  // very important as this is still set from EXECCTC
+  TIFR1 |= (1 << TOV1);  // very important as this is still set from EXECCTC (clear Timer/Counter1 Overflow Flag)
   TIMSK1 = (1 << TOIE1); // interrupt when TCNT1 overflows
 
-  //we use phase correct PWM mode 10 (with ICR1 as TOP)
+  // we use phase correct PWM mode 10 (with ICR1 as TOP)
   TCCR1A = (1 << COM1A1) + (1 << COM1B1) + (1 << WGM11);
   TCCR1B = (1 << WGM13); // normal mode, phase correct PWM ... don't start yet!
 
-  cTCBinTicks = SCK / 2 / PWMPRESCALER * (int32_t)cTCBinMS / 1000;
-  ICR1 = cTCBinTicks; //important to set this BEFORE OCR1A/B
+  ctc_bin_ticks = SCK / 2 / PWMPRESCALER * (int32_t)ctc_bin_ms / 1000;
+  ICR1 = ctc_bin_ticks + 1; // important to set this BEFORE OCR1A/B
+                            // +1 hack to allow a pulse width equal ctc_bin_ms (actually ctc_bin_ms is 8 us longer)
+  // get the first pulse
+  pulse_ms0 = ctc_data[c_ctc];
 
-  //get the first pulse
-  pulse_ms0 = cTC[cc];
-
-  cc++; // and increment counter, next cTC value will be set in interrupt
+  c_ctc++; // and increment counter, next ctc_data value will be set in interrupt
   pulse_tick0 = SCK / 2 / PWMPRESCALER * (int32_t)pulse_ms0 / 1000;
   if (pulse_tick0 > 0)
   {
@@ -563,23 +526,85 @@ void processEXECCTCPWM()
     OCR1A = -pulse_tick0;
   }
 
-  TCNT1 = ICR1 - 1; // Should not be zero, because then we will miss first entry as ISR "eats up" cTC value
+  TCNT1 = ICR1 - 1; // Should not be zero, because then we will miss first entry as ISR "eats up" ctc_data value
   // ICR1-1 means low latency as OCR1A/B will be updated at ICR1
+  busy = true;
   TCCR1B |= (1 << CS10) | (1 << CS11); // Now start timer with prescaler 64 (max res 8us, max dur = 0xFFFF x 8 = 524ms)
   // alternative: prescaler 256 (max res 32us, max dur = 0xFFFF x 32 = 2s)
 
   sei();
 }
 
+void processFLUSHCTC()
+{
+  last_cmd = "FLUSHCTC;";
+  if (busy)
+  {
+    print_error(ERR_BUSY);
+    return; // then we're just not ready...
+  }
+  print_ok(OK_FLUSHCTC);
+  resetCTC();
+}
+
+void processSTATUS()
+{
+  last_cmd = "STATUS;";
+  if ((busy) | (OSP_INPROGRESS()))
+  {
+    print_error(ERR_BUSY);
+  }
+  else
+  {
+    print_ok(OK_READY);
+  }
+}
+
+void processREADVAS()
+{
+  last_cmd = "READVAS;";
+  Serial.print(millis());
+  Serial.print(F(" "));
+  Serial.println(analogRead(ANALOG_PIN));
+}
+
+// This gets set as the default handler, and gets called when no other command matches.
+void unrecognized(const char *command)
+{
+  last_cmd = "say what?"; // could print the whole command
+  Serial.println(last_cmd);
+}
+
+//***********************************************************************************
+//*********** Interrupt Service Routines ********************************************
+//***********************************************************************************
+
 ISR(TIMER1_OVF_vect)
 {
-  //where all the magic happens
-  //ISR is called when counter has finished (after cTCBinMS)
-  //we simply set the thresholds to fire the next pulse OCR1A for UP
-  //OCR1B for DOWN
+  // where all the magic happens
+  // ISR is called when counter has finished (after ctc_bin_ms)
+  // we simply set the thresholds to fire the next pulse OCR1A for UP
+  // OCR1B for DOWN
 
-  int16_t pulse_ms = cTC[cc];
+  if (c_ctc == n_ctc) // we are done
+  {
+    TCCR1A = 0; // clear all Timer/PWM functionality
+    TCCR1B = 0;
+    PORTB &= ~(1 << PB5); // probably not necessary set PB5 low
+    PORTB &= ~(1 << PB6); // set PB6 low
+    c_ctc = 0;
+    TCNT1 = 0;               // does not help to do a MOVE after EXECCTCPWM...
+    TIMSK1 &= ~(1 << TOIE1); // can we disable interrupt when TCNT1 overflows in ISR ??? -> YES
+    busy = false;
+    n_ctc--; // get rid of the null pulse (so we can add pulses with loadctc)
+    return;
+  }
+
+  int16_t pulse_ms = ctc_data[c_ctc];
+  c_ctc++;
+
   int32_t pulse_tick = SCK / 2 / PWMPRESCALER * (int32_t)pulse_ms / 1000;
+
   if (pulse_tick > 0)
   {
     OCR1B = pulse_tick;
@@ -590,58 +615,56 @@ ISR(TIMER1_OVF_vect)
     OCR1B = 0;
     OCR1A = -pulse_tick;
   }
+}
 
-  if (cc == cTCPos + 1)
+ISR(TIMER3_OVF_vect)
+{
+  // we simply count the number of pulses and then stop
+  // ISR is called when counter has finished i.e. pulse has been generated
+
+  if (c_pulse == n_pulse - 1) //almost done
+    OCR3A = 0; // create null pulse
+  // as we fire ISR on TOP, we cut the last pulse in half therefore we do one more and set the last one to 0
+
+  if (c_pulse == n_pulse) //done
   {
-    TCCR1A = 0; //clear all Timer/PWM functionality
-    TCCR1B = 0;
-    PORTB &= ~(1 << PB5); // probably not necessary set PB5 low
-    PORTB &= ~(1 << PB6); // set PB6 low
-    cc = 0;
-    inEXECCTCPWM = 0;
-    TCNT1 = 0; //does not help to do a MOVE after EXECCTCPWM...
-    TIMSK1 &= ~(1 << TOIE1); // can we disable interrupt when TCNT1 overflows in ISR ??? -> YES
+    TCCR3A = 0; // clear all Timer/PWM functionality
+    TCCR3B = 0;
+
+    // PORTE &= ~(1 << PE3); // probably not necessary set PE3 low
+    c_pulse = 0;
+    TCNT3 = 0;               // does not help to do a MOVE after EXECCTCPWM...
+    TIMSK3 &= ~(1 << TOIE3); // can we disable interrupt when TCNT1 overflows in ISR ??? -> YES
+    busy = false;
   }
-  cc++;
+  c_pulse++;
 }
 
-void processFLUSHCTC()
+//***********************************************************************************
+//*********** helper functions
+//***********************************************************************************
+
+void print_error(int8_t error_code)
 {
-  LastCmd = "FLUSHCTC;";
-  if (inEXECCTCPWM | inEXECCTC)
+  Serial.print(-error_code);
+  if (debug_mode > 0)
   {
-    if (DebugMode > 0)
-      Serial.println(F("FLUSHCTC not possible EXECXXX in progress"));
-    return; // then we're just not ready...
+    Serial.print(" ");
+    Serial.print(error_str[error_code]);
   }
-
-  resetCTC();
+  Serial.println();
 }
 
-void processSTATUSCTC()
+void print_ok(int8_t ok_code)
 {
-  LastCmd = "STATUSCTC;";
-  Serial.print(F("inEXECCTC : "));
-  Serial.println(inEXECCTC);
-  Serial.print(F("inEXECCTCPWM : "));
-  Serial.println(inEXECCTCPWM);
+  Serial.print(ok_code);
+  if (debug_mode > 0)
+  {
+    Serial.print(" ");
+    Serial.print(ok_str[ok_code]);
+  }
+  Serial.println();
 }
-
-// This gets set as the default handler, and gets called when no other command matches.
-void unrecognized(const char *command)
-{
-  LastCmd = "What?"; //could print the whole command
-}
-
-void processREADVAS()
-{
-  LastCmd = "START;";
-  Serial.print(millis());
-  Serial.print(F(" "));
-  Serial.println(analogRead(AnalogPin));
-  
-}
-
 //***********************************************************************************
 //*********** diagnostics, free RAM (i.e. between stack and heap)
 //***********************************************************************************
@@ -667,45 +690,63 @@ void displayStatusSerial()
   Serial.println(F(" +++"));
 
   Serial.print(F("Debug level: "));
-  Serial.println(DebugMode);
+  Serial.println(debug_mode);
 
   Serial.print(F("Last serial command: "));
-  Serial.println(LastCmd);
+  Serial.println(last_cmd);
 }
 
 //***********************************************************************************
 //*********** status help over serial port evoked by serial command HELP;
 //***********************************************************************************
-void displayHelp()
+void display_help()
 {
   Serial.println(F("DIAG          - Get diagnostics"));
   Serial.println(F("MOVE;XX       - Move temp up/down for XX us"));
   Serial.println(F("START         - Send 100ms TTL pulse to start program"));
-  Serial.println(F("SHOCK;xx;yy   - Set Digitimer stimulus duration (xx) and interval between pulses (yy) in ms"));
-  Serial.println(F("SHOCK_US;nn;yy- Apply nn Digitimer stimuli (0.3µs) with an interval between pulses of yy µs"));
+  Serial.println(F("SHOCK;nn(;yy) - Digitimer stimuli number (nn) @ interval 1000us OR additionally specify interval between pulses (yy) in us"));
   Serial.println(F("GETTIME       - Get Arduino time in ms"));
-  Serial.println(F("DEBUG;XX      - Set debug state (0: OFF)"));
+  Serial.println(F("DEBUG;XX      - Set debug state (0: OFF) (1: ON))"));
   Serial.println(F("HELP          - This command"));
-  Serial.println(F("INITCTC;xx    - Initialize complex time courses (cTC) with cycle xx in ms (500 max)"));
-  Serial.println(F("LOADCTC;xx    - add pulse to cTC queue (xx in ms) -xx means temperature decrease, max 3000 items"));
-  Serial.println(F("QUERYCTC      - status of the cTC queue"));
-  Serial.println(F("EXECCTC       - old way to execute cTC queue using loop(), use EXECCTCPWM instead"));
-  Serial.println(F("EXECCTCPWM    - new way to execute cTC queue using precise PWM functionality"));
-  Serial.println(F("FLUSHCTC      - clear cTC queue"));
-  Serial.println(F("STATUSCTC     - check whether EXECCTC(PWM) is running"));
+  Serial.println(F("INITCTC;xx    - Initialize complex time courses (ctc_data) with cycle xx in ms (500 max)"));
+  Serial.print(F("LOADCTC;xx    - add pulse to ctc_data queue (xx in ms) -xx means temperature decrease, max "));
+  Serial.print(CTC_MAX_N);
+  Serial.println(F(" items"));
+  Serial.println(F("QUERYCTC(;yy) - status of the ctc_data queue (yy=1 get all entries)"));
+  Serial.println(F("EXECCTC       - execute ctc_data queue using precise PWM functionality"));
+  Serial.println(F("FLUSHCTC      - reset ctc and clear ctc_data queue"));
+  Serial.println(F("STATUS        - check whether anything is running"));
   Serial.println(F("READVAS       - returns time in ms and the reading of the VAS potentiometer 0..1023"));
 }
 
+void display_error_codes()
+{
+  Serial.println(F("Error codes:"));
+  for (int8_t i = 0; i < N_ERROR_CODES; i++)
+  {
+    Serial.print(-i);
+    Serial.print(F(" "));
+    Serial.println(error_str[i]);
+  }
+
+  Serial.println(F("OK codes:"));
+  for (int8_t i = 0; i < N_OK_CODES; i++)
+  {
+    Serial.print(i);
+    Serial.print(F(" "));
+    Serial.println(ok_str[i]);
+  }
+}
 //***********************************************************************************
-//*********** subfunction to reset CTC variables
+//*********** subfunction to reset ctc_data variables
 //***********************************************************************************
 void resetCTC()
 {
-  cTCStatus = 0; // not ready
-  cTCStatusStr = "not initialized";
-  cTCBreak = 0; // be ready to accept LOADCTC
-  memset_volatile(cTC, 0, sizeof(cTC));
-  cTCPos = 0;
+  ctc_bin_ms = 0;
+  n_ctc = 0;
+  c_ctc = 0;
+  memset_volatile(ctc_data, 0, sizeof(ctc_data));
+  // reset everything
 }
 
 //***********************************************************************************
@@ -714,45 +755,52 @@ void resetCTC()
 
 void ramp_temp(int32_t ms)
 {
-  //Serial.print(F("ramp_temp: "));
-  //Serial.print(ms);
-  //Serial.println(F("ms"));
+  if (debug_mode > 0)
+  {
+    Serial.print(F("ramp_temp: "));
+    Serial.print(ms);
+    Serial.println(F("ms"));
+  }
   if (ms < 0)
   {
     ms = abs(ms);
-    if (DebugMode > 0)
+    if (debug_mode > 0)
     {
       Serial.print(F("Ramping down:  "));
       Serial.println(ms);
     }
     TCCR1B = 0;
-    digitalWrite(LedPin, HIGH); // LED ON
-    pinMode(DownPin, OUTPUT);
-    digitalWrite(DownPin, HIGH); //
-    delay(ms);                   // waits for ms
-    digitalWrite(DownPin, LOW);  //
-    digitalWrite(LedPin, LOW);   // LED OFF
+    TCCR1A = 0;
+    busy = true;
+    OUT_WRITE(LED_PIN, HIGH);  //
+    OUT_WRITE(DOWN_PIN, HIGH); //
+    delay(ms);                 // waits for ms
+    OUT_WRITE(DOWN_PIN, LOW);  //
+    OUT_WRITE(LED_PIN, LOW);   //
+    busy = false;
   }
   else if (ms > 0)
   {
-    if (DebugMode > 0)
+    if (debug_mode > 0)
     {
       Serial.print(F("Ramping up:  "));
       Serial.println(ms);
     }
     TCCR1B = 0;
-    digitalWrite(LedPin, HIGH); // LED ON
-    pinMode(UpPin, OUTPUT);
-    digitalWrite(UpPin, HIGH); // port high
-    delay(ms);                 // waits for ms
-    digitalWrite(UpPin, LOW);  // port low
-    digitalWrite(LedPin, LOW); // LED OFF
+    TCCR1A = 0;
+    busy = true;
+    OUT_WRITE(LED_PIN, HIGH); //
+    OUT_WRITE(UP_PIN, HIGH);  //
+    delay(ms);                // waits for ms
+    OUT_WRITE(UP_PIN, LOW);   //
+    OUT_WRITE(LED_PIN, LOW);  //
+    busy = false;
   }
   sCmd.clearBuffer();
 }
 
 //***********************************************************************************
-//*********** Prepare timer
+//*********** Prepare timer 1
 //***********************************************************************************
 
 void osp_setup(uint8_t which, int32_t prescaler)
@@ -779,7 +827,7 @@ void osp_setup(uint8_t which, int32_t prescaler)
     OCR1B = 0xffff;
     TCCR1A = (1 << COM1B0) | (1 << COM1B1) | (1 << WGM11); // OC1B=Set on Match, clear on BOTTOM. Mode 14 Fast PWM. p.131
     // Set OC1B to output, pick your board- Uno vs 2560
-    //DDRB = (1<<2);     // Set pin to output (Note that OC1B = GPIO port PB2 = Arduino Digital Pin D10 Uno)
+    // DDRB = (1<<2);     // Set pin to output (Note that OC1B = GPIO port PB2 = Arduino Digital Pin D10 Uno)
     DDRB = (1 << 6); // Set pin to output (Note that OC1B = GPIO port PB6 = Arduino Digital Pin D12 Mega2560)
   }
 
@@ -790,9 +838,9 @@ void osp_setup(uint8_t which, int32_t prescaler)
 
   //   (using Chris Hahn's notation here)
   // Prescaler  Setup - Choose one of these, then choose a matching "wait" delay statement below.
-  //TCCR1B = (1<<WGM12) | (1<<WGM13) | (1<<CS10); // Prescaler = 1; Start counting now. Max ~4mS
-  //TCCR1B = (1<<WGM12) | (1<<WGM13) | (1<<CS11); // Prescaler = 8; Start counting now. Max ~32mS, starts in ~10uS or better
-  //TCCR1B = (1<<WGM12) | (1<<WGM13) | (1<<CS10) | (1<<CS11); // Prescaler = 64; Start counting now. Max ~.26 sec, starts in ~20uS or better
+  // TCCR1B = (1<<WGM12) | (1<<WGM13) | (1<<CS10); // Prescaler = 1; Start counting now. Max ~4mS
+  // TCCR1B = (1<<WGM12) | (1<<WGM13) | (1<<CS11); // Prescaler = 8; Start counting now. Max ~32mS, starts in ~10uS or better
+  // TCCR1B = (1<<WGM12) | (1<<WGM13) | (1<<CS10) | (1<<CS11); // Prescaler = 64; Start counting now. Max ~.26 sec, starts in ~20uS or better
   if (prescaler == 256)
   {
     TCCR1B = (1 << WGM12) | (1 << WGM13) | (1 << CS12); // Prescaler = 256; Start counting now. Max ~1.05 sec, starts in ~64uS or better
@@ -814,9 +862,9 @@ void osp_setup(uint8_t which, int32_t prescaler)
 void ramp_temp_prec(int32_t o_us) // specifiy in us
 {
   int32_t o_tic;
-  //Serial.print(F("ramp_temp_prec: "));
-  //Serial.print(o_us);
-  //Serial.println(F("us"));
+  // Serial.print(F("ramp_temp_prec: "));
+  // Serial.print(o_us);
+  // Serial.println(F("us"));
   if (!OSP_INPROGRESS())
   {
 
@@ -831,15 +879,15 @@ void ramp_temp_prec(int32_t o_us) // specifiy in us
 
     cps = SCK / prescaler; // tics per second
     // now convert us into tics
-    o_tic = (int64_t)o_us * cps / 1000000; //convert from us to tics
+    o_tic = (int64_t)o_us * cps / 1000000; // convert from us to tics
 
     if (o_tic < 0)
     {
       o_tic = abs(o_tic);
 
-      if (DebugMode > 0)
+      if (debug_mode > 0)
       {
-        Serial.print(F("Ramping down:  "));
+        Serial.print(F("Precision-ramping down:  "));
         Serial.println(o_tic);
       }
       osp_setup(A, prescaler);
@@ -847,9 +895,9 @@ void ramp_temp_prec(int32_t o_us) // specifiy in us
     }
     else if (o_tic > 0)
     {
-      if (DebugMode > 0)
+      if (debug_mode > 0)
       {
-        Serial.print(F("Ramping up:  "));
+        Serial.print(F("Precision-ramping up:  "));
         Serial.println(o_tic);
       }
       osp_setup(B, prescaler);
