@@ -92,7 +92,8 @@ const char *ok_str[] = {OK_CODES};
 #define SCK 16E6        // clock at 16 MHz
 #define PWMPRESCALER 64 // prescaler for PWM mode
 
-#define MAX_TIME 4194240 // this is the longest in us the timer can do precisely
+// #define MAX_TIME 4194240 // this is the longest in us the timer can do precisely
+#define MAX_TIME 1000 // debug
 
 // For prescaler = 8, 64, 256, 1024 use OSP_SET_AND_FIRE_LONG(cycles) instead. The "wait" time-waster makes it work!
 // #define wait {delayMicroseconds(2);} // Un-comment this for prescaler = 8
@@ -135,6 +136,8 @@ uint16_t ctc_bin_ms; // 0 to 500
 volatile int32_t ctc_bin_ticks;
 volatile int16_t ctc_data[CTC_MAX_N + 1]; // we have to add a zero pulse at the end
 volatile uint16_t n_ctc, c_ctc;
+
+volatile int32_t count_down_ms;
 
 volatile bool busy;
 
@@ -578,6 +581,24 @@ void unrecognized(const char *command)
 //***********************************************************************************
 //*********** Interrupt Service Routines ********************************************
 //***********************************************************************************
+ISR(TIMER4_COMPA_vect)
+{
+  if (count_down_ms < 0)
+    count_down_ms++;
+  if (count_down_ms > 0)
+    count_down_ms--;
+
+  if (count_down_ms == 0) // now we are done
+  {
+    TCCR4A = 0;
+    TCCR4B = 0;
+    TIMSK4 &= ~(1 << OCIE4A); // can we disable interrupt  in ISR ??? -> YES
+    OUT_WRITE(DOWN_PIN, LOW); //
+    OUT_WRITE(UP_PIN, LOW);   //
+    OUT_WRITE(LED_PIN, LOW);  //
+    busy = false;
+  }
+}
 
 ISR(TIMER1_OVF_vect)
 {
@@ -622,11 +643,11 @@ ISR(TIMER3_OVF_vect)
   // we simply count the number of pulses and then stop
   // ISR is called when counter has finished i.e. pulse has been generated
 
-  if (c_pulse == n_pulse - 1) //almost done
-    OCR3A = 0; // create null pulse
+  if (c_pulse == n_pulse - 1) // almost done
+    OCR3A = 0;                // create null pulse
   // as we fire ISR on TOP, we cut the last pulse in half therefore we do one more and set the last one to 0
 
-  if (c_pulse == n_pulse) //done
+  if (c_pulse == n_pulse) // done
   {
     TCCR3A = 0; // clear all Timer/PWM functionality
     TCCR3B = 0;
@@ -761,42 +782,44 @@ void ramp_temp(int32_t ms)
     Serial.print(ms);
     Serial.println(F("ms"));
   }
+  cli();
+  count_down_ms = ms;
+  TCCR4A = 0;
+  TCCR4B = 0;
+  TCCR4B |= (1 << WGM42);
+  // set Output Compare Register to (250 - 1) ticks
+  OCR4A = 0xF9;
+  // TCNT4
+  TCNT4 = 0;
+
+  // TIMSK4
+  // Set Timer Interrupt Mask Register to
+  // Clear Timer on Compare channel A for timer 4
+  TIFR4 |= (1 << OCF4A);  // very important otherwise ISR will immediately be executed
+  TIMSK4 |= (1 << OCIE4A);
+  busy = true;
   if (ms < 0)
   {
-    ms = abs(ms);
     if (debug_mode > 0)
     {
       Serial.print(F("Ramping down:  "));
-      Serial.println(ms);
+      Serial.println(-ms);
     }
-    TCCR1B = 0;
-    TCCR1A = 0;
-    busy = true;
     OUT_WRITE(LED_PIN, HIGH);  //
     OUT_WRITE(DOWN_PIN, HIGH); //
-    delay(ms);                 // waits for ms
-    OUT_WRITE(DOWN_PIN, LOW);  //
-    OUT_WRITE(LED_PIN, LOW);   //
-    busy = false;
   }
-  else if (ms > 0)
+  if (ms > 0)
   {
     if (debug_mode > 0)
     {
       Serial.print(F("Ramping up:  "));
       Serial.println(ms);
     }
-    TCCR1B = 0;
-    TCCR1A = 0;
-    busy = true;
     OUT_WRITE(LED_PIN, HIGH); //
     OUT_WRITE(UP_PIN, HIGH);  //
-    delay(ms);                // waits for ms
-    OUT_WRITE(UP_PIN, LOW);   //
-    OUT_WRITE(LED_PIN, LOW);  //
-    busy = false;
   }
-  sCmd.clearBuffer();
+  TCCR4B |= (1 << CS41) | (1 << CS40); //start clock
+  sei();
 }
 
 //***********************************************************************************
@@ -808,7 +831,7 @@ void osp_setup(uint8_t which, int32_t prescaler)
   TCCR1B = 0; // Halt counter by setting clock select bits to 0 (No clock source).
   // This keeps anything from happening while we get set up
 
-  TCNT1 = 0x0000; // Start counting at bottom.
+  TCNT1 = 0; // Start counting at bottom.
 
   ICR1 = 0; // Set TOP to 0, Mode 14. This effectively keeps us from counting becuase the counter just keeps reseting back to 0.
   // We break out of this by manually setting the TCNT higher than 0, in which case it will count all the way up to MAX
