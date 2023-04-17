@@ -42,6 +42,7 @@ const char *error_str[] = {ERROR_CODES};
 
 // define error codes
 #define OK_CODES  \
+  C(OK_NULL)      \
   C(OK)           \
   C(OK_READY)     \
   C(OK_MOVE_SLOW) \
@@ -264,7 +265,7 @@ void processMOVE()
       ramp_temp(us / 1000);
     }
   }
-    else
+  else
   {
     print_error(ERR_NO_PARAM);
     return;
@@ -414,7 +415,7 @@ void processINITCTC()
       return;
     }
   }
-    else
+  else
   {
     print_error(ERR_NO_PARAM);
     return;
@@ -465,12 +466,11 @@ void processLOADCTC()
       return;
     }
   }
-    else
+  else
   {
     print_error(ERR_NO_PARAM);
     return;
   }
-
 }
 
 void processQUERYCTC()
@@ -786,7 +786,7 @@ void display_error_codes()
   }
 
   Serial.println(F("OK codes:"));
-  for (int8_t i = 0; i < N_OK_CODES; i++)
+  for (int8_t i = 1; i < N_OK_CODES; i++)// skip first ok code
   {
     Serial.print(i);
     Serial.print(F(" "));
