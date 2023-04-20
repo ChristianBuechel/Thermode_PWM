@@ -280,10 +280,10 @@ void processSTART()
     print_error(ERR_BUSY);
     return;
   }
-  print_ok(OK);
   OUT_WRITE(START_PIN, HIGH); //
-  delay(100);                 // wait
+  delay(10);                  // wait
   OUT_WRITE(START_PIN, LOW);  //
+  print_ok(OK);
 }
 
 void processSHOCK()
