@@ -2,13 +2,15 @@
 //***********************************************************************************
 //*********** defines
 //***********************************************************************************
-// thermode v 3.0 (2023-4-16)
-// thermode v 2.8 (2023-4-12)
+// thermode v 3.2 (2023-07-17)
+// thermode v 3.1 (2023-06-22)
+// thermode v 3.0 (2023-04-16)
+// thermode v 2.8 (2023-04-12)
 
-// thermode v 2.6 (2023-3-20)
-// thermode v 2.5 (2021-5-13)
+// thermode v 2.6 (2023-03-20)
+// thermode v 2.5 (2021-05-13)
 // original author: Christian Büchel
-// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4), Christian Büchel (v2.5-v3.0)
+// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4, v3.1), Christian Büchel (v2.5-v3.0)
 
 #include "Arduino.h"
 #include "Thermode_PWM.h"
@@ -122,7 +124,7 @@ const char *ok_str[] = {OK_CODES};
 //*********** initialize global variables
 //***********************************************************************************
 
-const float SWversion = 3.0;
+const float SWversion = 3.2;
 
 String last_cmd; // last cmd goes here
 
@@ -249,9 +251,9 @@ void processMOVE()
 
     us = atol(arg);
     if (abs(us) < MAX_OSP_TIME)
-    {
-      print_ok(OK_MOVE_PREC);
+    {      
       ramp_temp_prec(us); // Better to pass over us and then decide in ramp which prescaler to use
+      print_ok(OK_MOVE_PREC);
     }
     else
     {
@@ -260,9 +262,9 @@ void processMOVE()
         Serial.print(F("Pulse time longer than "));
         Serial.println(MAX_OSP_TIME);
         Serial.println(F("using ramp_temp"));
-      }
-      print_ok(OK_MOVE_SLOW);
+      }      
       ramp_temp(us / 1000);
+      print_ok(OK_MOVE_SLOW);
     }
   }
   else
@@ -281,7 +283,7 @@ void processSTART()
     return;
   }
   OUT_WRITE(START_PIN, HIGH); //
-  delay(10);                  // wait
+  delay(40);                  // wait
   OUT_WRITE(START_PIN, LOW);  //
   print_ok(OK);
 }
@@ -453,7 +455,7 @@ void processLOADCTC()
   {
     last_cmd = last_cmd + arg;
     move_ms = atoi(arg);
-    if (check_range_abs(&t_move_ms, move_ms, (int16_t)1, (int16_t)ctc_bin_ms))
+    if (check_range_abs(&t_move_ms, move_ms, (int16_t)0, (int16_t)ctc_bin_ms))
     {
       ctc_data[n_ctc] = t_move_ms;
       n_ctc++; // increment pulse counter CAVE, this is the number of pulses, not the index of the last pulse
@@ -489,12 +491,20 @@ void processQUERYCTC()
   else
     query_lvl = 0;
 
-  Serial.print(F("ctc_bin_ms: "));
-  Serial.println(ctc_bin_ms);
-  Serial.print(F("n_ctc: "));
-  Serial.println(n_ctc);
+  if ((query_lvl > 0) & (ctc_bin_ms>0) & (n_ctc > 0)) 
+  {
+    Serial.println(F("Status: READY"));
+  }
 
-  if ((query_lvl > 0) & (n_ctc > 0)) // if required, also return more detailed info
+  if ((query_lvl > 1) & (n_ctc > 0)) 
+  {
+    Serial.print(F("ctc_bin_ms: "));
+    Serial.println(ctc_bin_ms);
+    Serial.print(F("n_ctc: "));
+    Serial.println(n_ctc);
+  }
+
+  if ((query_lvl > 2) & (n_ctc > 0)) // if required, also return more detailed info
   {
     Serial.println(F("ctc_data: "));
     for (uint16_t p = 0; p < n_ctc; p++)
