@@ -801,6 +801,8 @@ void display_help()
   Serial.println(F("MOVE;XX       - Move temp up/down for XX us"));
   Serial.println(F("START         - Send 100ms TTL pulse to start thermode"));
   Serial.println(F("SHOCK;nn(;yy) - Digitimer stimuli number (nn) @ interval 1000us OR additionally specify interval between pulses (yy) in us (>1000) "));
+  Serial.println(F("PULSE8        - Send 1ms TTL pulse to pin 8"));
+  Serial.println(F("PULSE9        - Send 1ms TTL pulse to pin 9"));
   Serial.println(F("GETTIME       - Get Arduino time in ms"));
   Serial.println(F("DEBUG;XX      - Set debug state (0: OFF) (1: ON))"));
   Serial.println(F("HELP          - This command"));
@@ -808,6 +810,7 @@ void display_help()
   Serial.print(F("LOADCTC;xx    - add pulse to ctc_data queue (xx in ms) -xx means temperature decrease, max "));
   Serial.print(CTC_MAX_N);
   Serial.println(F(" items"));
+
   Serial.println(F("QUERYCTC(;yy) - status of the ctc_data queue (yy=1 get all entries)"));
   Serial.println(F("EXECCTC       - execute ctc_data queue using precise PWM"));
   Serial.println(F("FLUSHCTC      - reset ctc and clear ctc_data queue"));
