@@ -10,7 +10,7 @@
 // thermode v 2.6 (2023-03-20)
 // thermode v 2.5 (2021-05-13)
 // original author: Christian Büchel
-// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4, v3.1), Christian Büchel (v2.5-v3.0)
+// modifications: Lea Kampermann (v1), Björn Horing (v2.0-v2.4, v3.1-v3.2), Christian Büchel (v2.5-v3.0; v3.3)
 
 #include "Arduino.h"
 #include "Thermode_PWM.h"
@@ -85,9 +85,9 @@ const char *ok_str[] = {OK_CODES};
 // given a max ctc_bin_ms of 500ms we can define ctc_data of 1000s
 
 #define DIGIHI_US 100         // pulse dur in  µs
-#define DEFAULT_DIGI_ISI 1000 // in us
-#define MAX_DIGI_STIM 2000    //
-#define MAX_DIGI_ISI 10000    // in us
+#define MIN_DIGI_ISI 1000 // in us
+#define MAX_DIGI_STIM 30000    // why not?
+#define MAX_DIGI_ISI 65000    // in us should allow freqeuncies down to 15 Hz
 
 #define SCK 16E6        // clock at 16 MHz
 #define PWMPRESCALER 64 // prescaler for PWM mode
@@ -124,7 +124,7 @@ const char *ok_str[] = {OK_CODES};
 //*********** initialize global variables
 //***********************************************************************************
 
-const float SWversion = 3.2;
+const float SWversion = 3.3;
 
 String last_cmd; // last cmd goes here
 
@@ -324,7 +324,7 @@ void processSHOCK()
   {
     last_cmd = last_cmd + arg;
     New = atoi(arg);
-    if (!check_range(&isi, New, (uint16_t)DEFAULT_DIGI_ISI, (uint16_t)MAX_DIGI_ISI))
+    if (!check_range(&isi, New, (uint16_t)MIN_DIGI_ISI, (uint16_t)MAX_DIGI_ISI))
     {
       print_error(ERR_SHOCK_ISI);
       return;
@@ -332,7 +332,7 @@ void processSHOCK()
   }
   else
   {
-    isi = DEFAULT_DIGI_ISI;
+    isi = MIN_DIGI_ISI;
   }
 
   if (debug_mode > 0)
