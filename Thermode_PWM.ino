@@ -2,6 +2,8 @@
 //***********************************************************************************
 //*********** defines
 //***********************************************************************************
+// thermode v 3.4 (06/2025)
+// thermode v 3.3 (2025)
 // thermode v 3.2 (2023-07-17)
 // thermode v 3.1 (2023-06-22)
 // thermode v 3.0 (2023-04-16)
@@ -73,12 +75,16 @@ const char *ok_str[] = {OK_CODES};
 // OC3A = GPIO port PE3 = Arduino	Digital pin D5 Mega2560  --> PWM shock
 #define PE3 3 // pin 5 --> SHOCK
 
-// no comments after the following #defines are allowed due to macro def
+// no comments after the following port number #defines are allowed due to macro def
 #define ANALOG_PIN 14
 #define UP_PIN 12
 #define DOWN_PIN 11
 #define START_PIN 7
 #define LED_PIN 13
+
+#define PIN8_PIN 8 
+#define PIN9_PIN 9 
+#define PIN_PULSE 1 // duration in ms
 
 #define CTC_MAX_N 2500
 // max entries for complex time-course (2500 + 1 zero)
@@ -124,7 +130,7 @@ const char *ok_str[] = {OK_CODES};
 //*********** initialize global variables
 //***********************************************************************************
 
-const float SWversion = 3.3;
+const float SWversion = 3.4;
 
 String last_cmd; // last cmd goes here
 
@@ -173,6 +179,8 @@ void setup()
   s_cmd.addCommand("MOVE", processMOVE);
   s_cmd.addCommand("START", processSTART);
   s_cmd.addCommand("SHOCK", processSHOCK);
+  s_cmd.addCommand("PULSE8", processPULSE8);
+  s_cmd.addCommand("PULSE9", processPULSE9);
   s_cmd.addCommand("GETTIME", processGETTIME);
   s_cmd.addCommand("DEBUG", processDEBUG);
   s_cmd.addCommand("HELP", processHELP);
@@ -273,6 +281,28 @@ void processMOVE()
     return;
   }
 }
+
+
+void processPULSE8()
+{
+  last_cmd = "PULSE8;";
+  // we are delibereatly not checking if stuff is going on see how this works
+  OUT_WRITE(PIN8_PIN, HIGH); //
+  delay(PIN_PULSE);                  // wait
+  OUT_WRITE(PIN8_PIN, LOW);  //
+  print_ok(OK);
+}
+
+void processPULSE9()
+{
+  last_cmd = "PULSE9;";
+  // we are delibereatly not checking if stuff is going on see how this works
+  OUT_WRITE(PIN9_PIN, HIGH); //
+  delay(PIN_PULSE);                  // wait
+  OUT_WRITE(PIN9_PIN, LOW);  //
+  print_ok(OK);
+}
+
 
 void processSTART()
 {
