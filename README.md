@@ -3,29 +3,37 @@
   
 This is the Arduino driver code for a Thermode using PWM.
 	
+Version 3.50
 
 ## Using the code
 
 The commands that are available are:
 
+* VER           - Print version
 * DIAG          - Get diagnostics
 * MOVE;XX       - Move temp up/down for XX us
-* START         - Send 100ms TTL pulse to start program
-* SHOCK;xx;yy   - Set Digitimer stimulus duration (xx) and interval between pulses (yy) in ms
-* PULSE8        - Send a 1ms pulse to pin 8 (async ie should be possible during complex waveform)
-* PULSE9        - Send a 1ms pulse to pin 9 (see above)   
-* GETTIME       - Get Arduino time in ms
-* DEBUG;XX      - Set debug state (0: OFF)
+* START         - Send 40ms TTL pulse to start thermode
+* SHOCK;nn(;yy) - Digitimer stimuli number (nn) @interval 1100us OR additionally specify interval between pulses (yy) in us (>1000) 
+* PULSE8        - Send 1ms TTL pulse to pin 8
+* PULSE9        - Send 1ms TTL pulse to pin 9
+* GETTIME       - Get Arduino time in ms 
+* DEBUG;XX      - Set debug state (0: OFF) (1: ON)
 * HELP          - This command
-* INITCTC;xx    - Initialize complex time courses (cTC) with cycle xx in ms (500 max)
-* LOADCTC;xx    - add pulse to cTC queue (xx in ms) -xx means temperature decrease, max 2500 items
-* QUERYCTC      - status of the cTC queue
-* EXECCTC       - new way to execute cTC queue using precise PWM functionality
-* FLUSHCTC      - clear cTC queue
-* STATUS        - check whether EXECCTC(PWM) is running"));
-* READVAS       - returns time in ms and the reading of ADC0;
-
+* INITCTC;xx    - Initialize complex time courses (ctc_data) with cycle xx in ms (500 max)
+* LOADCTC;xx    - add pulse to ctc_data queue (xx in ms) -xx means temperature decrease, max 2500 items
+* QUERYCTC(;yy) - status of the ctc_data queue (yy=3 to get all entries)
+* EXECCTC       - execute ctc_data queue using precise PWM
+* FLUSHCTC      - reset ctc and clear ctc_data queue
+* STATUS        - check whether anything (thermode or digitimer) is running
+* STATUS_D      - check whether digitimer is running
+* STATUS_T      - check whether thermode is running
+* KILL          - stop all activity (thermode and digitimer)
+* KILL_D        - stop activity of digitimer
+* KILL_T        - stop activity of thermode
+* READVAS       - returns time in ms and the reading of the VAS potentiometer 0..1023
+* SETID         - enter new name for thermoino, saved permanently in EEPROM
+* GETID         - return name of thermoino from EEPROM
 
 ## General Operation
 
-See Thermoino_PWM.pdf for details
+See Thermoino_PWM.docx for details
