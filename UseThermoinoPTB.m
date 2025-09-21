@@ -76,7 +76,6 @@ switch lower(action)
     
     %-----------------------------------------------------------
     case 'init' % UseThermoino('init',ComPort, BaselineTemp, RateOfRise)
-        % UseThermoino('init',ComPort, Baudrate, BaselineTemp, RateOfRise) --> Baudrate is ignored
         % creates a global struct array thermoino
         % all functions that use UseThermoino should declare this
         % as global (global thermoino;)
@@ -85,19 +84,30 @@ switch lower(action)
         if ~any(strcmp(comports,varargin{1})), error([varargin{1} ' does not exist']);return;end;
         comports = serialportlist("available");
         if ~any(strcmp(comports,varargin{1})), error([varargin{1} ' is already open']);return;end;
-        s  = IOPort('OpenSerialPort', char(varargin{1}),'BaudRate=115200');
+        s  = IOPort('OpenSerialPort', char(varargin{1}),'BaudRate=115200,DTR=1,RTS=1');
         WaitSecs(1);
+        IOPort('Purge',s);
+        IOPort('Flush',s);
+        
         ver = mywriteread(s,"VER",6);
-        if ver == current_version % check for latest thermoino
-            ind = numel(thermoino)+1;
-            thermoino(ind).port   = varargin{1};
-            thermoino(ind).id     = mywriteread(s,"GETID");
-            thermoino(ind).handle = s;
-            thermoino(ind).t      = varargin{2};
-            thermoino(ind).ror    = varargin{3};
-            thermoino(ind).ctc    = [];
-            thermoino(ind).period = [];
-            clear s;
+        switch ver
+            case  current_version % check for latest thermoino
+                ind = numel(thermoino)+1;
+                thermoino(ind).port   = varargin{1};
+                thermoino(ind).id     = mywriteread(s,"GETID");
+                thermoino(ind).handle = s;
+                thermoino(ind).t      = varargin{2};
+                thermoino(ind).t_init = varargin{2};
+                thermoino(ind).ror    = varargin{3};
+                thermoino(ind).ctc    = [];
+                thermoino(ind).period = [];
+                clear s;
+            case '-02'
+                IOPort('Close',s);
+                error(['Command VER not implemented, old thermoino firmware']);
+            otherwise
+                IOPort('Close',s);
+                error(['Version ' ver ' not supported']);
         end
         
         %-----------------------------------------------------------
@@ -145,7 +155,8 @@ switch lower(action)
             [resp, when] = mywriteread(thermoino(ind).handle,"START");
             status = str2num(resp);
             if status > 0
-                varargout{1} = when;
+                thermoino(ind).t = thermoino(ind).t_init; %temp back to where we started
+                varargout{1}     = when;
             else
                 varargout{1} = ERRORMSG{abs(status)};
             end
@@ -165,7 +176,7 @@ switch lower(action)
             ind = 1;
         end
         if ind <= numel(thermoino)
-            outCmd = sprintf('MOVE;%d',p_dur);
+            outCmd = sprintf('MOVE;%d',round(p_dur));
             [resp, when] = mywriteread(thermoino(ind).handle,outCmd);
             status = str2num(resp);
             if status > 0
@@ -190,7 +201,7 @@ switch lower(action)
         end
         if ind <= numel(thermoino)
             p_dur = ((target - thermoino(ind).t)./thermoino(ind).ror).*1e6;
-            outCmd = sprintf('MOVE;%d',p_dur);
+            outCmd = sprintf('MOVE;%d',round(p_dur));
             [resp, when] = mywriteread(thermoino(ind).handle,outCmd);
             status = str2num(resp);
             if status > 0
@@ -218,7 +229,7 @@ switch lower(action)
         
         if isi < min_isi, error(['Minimum ISI is ' num2str(min_isi) 'µs']);end
         
-        outCmd = sprintf('SHOCK;%d;%d\n',nShocks,isi);
+        outCmd = sprintf('SHOCK;%d;%d\n',round(nShocks),round(isi));
         if ind <= numel(thermoino)
             [resp, when] = mywriteread(thermoino(ind).handle,outCmd);
             status = str2num(resp);
@@ -254,7 +265,7 @@ switch lower(action)
         if any(~isInt(data)), error(['Only integers allowed']);end
         
         if ind <= numel(thermoino)
-            outCmd = sprintf('INITCTC;%d',period); % we always initialize the CTC
+            outCmd = sprintf('INITCTC;%d',round(period)); % we always initialize the CTC
             [resp, ~] = mywriteread(thermoino(ind).handle,outCmd);
             if str2num(resp)<0
                 error('thermoino busy');
@@ -351,8 +362,7 @@ switch lower(action)
         else
             error(['Thermoino ' num2str(ind) ' does not exist'])
         end
-        
-        %-----------------------------------------------------------
+        %-----------------------------------------------------------        
     case 'kill' % closes all thermoino instances
         IOPort('CloseAll');
         clear global thermoino
