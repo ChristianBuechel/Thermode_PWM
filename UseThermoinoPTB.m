@@ -80,10 +80,16 @@ switch lower(action)
         % all functions that use UseThermoino should declare this
         % as global (global thermoino;)
         %-----------------------------------------------------------
-        comports = serialportlist("all");
-        if ~any(strcmp(comports,varargin{1})), error([varargin{1} ' does not exist']);return;end;
-        comports = serialportlist("available");
-        if ~any(strcmp(comports,varargin{1})), error([varargin{1} ' is already open']);return;end;
+        oldverbosity = IOPort('Verbosity', 0);
+        [h, errmsg] = IOPort('OpenSerialPort', varargin{1},'BaudRate=115200,DTR=1,RTS=1');
+        if h >= 0
+            IOPort('Close', h); %OK Port exists and can be opened
+        elseif isempty(strfind(errmsg, 'ENOENT'))
+            error([varargin{1} ' is already open']);
+        else
+            error([varargin{1} ' does not exist']);
+        end
+        IOPort('Verbosity', oldverbosity);
         s  = IOPort('OpenSerialPort', char(varargin{1}),'BaudRate=115200,DTR=1,RTS=1');
         WaitSecs(1);
         IOPort('Purge',s);
@@ -373,7 +379,7 @@ end
 
 %-----------------------------------------------------
 function [resp, when] = mywriteread(s,str,n)
-% 3 args : wait for bytes (including CR and LF)
+% 3 args : wait for n bytes (including CR and LF)
 % 2 args : wait for LF
 t_out = 2; %timeout 2s
 data  = [];
