@@ -1,13 +1,22 @@
-function ports = QuerySerialPortsWin(cmd)
+function out = QuerySerialPorts(cmd)
 % implemented only for windows
 
-if IsOSX || IsLinux
-    error('OSX and Linux not supported')
+if IsOSX
+    error('OSX not supported')
 end
 
+if IsLinux
+  pp = dir('/dev/ttyUSB*');
+  pp = [ dir('/dev/ttyACM*'); pp];
+  pp = [ dir('/dev/ttyS*'); pp];
+  ports = cellstr(strvcat(pp.name));
+  prefix = '/dev/';
+else
 % List of all candidates COM1 to COM256
 ports      = strtrim(cellstr(num2str((1:256)', 'COM%i')));
-availPorts = {}; 
+prefix     = '';
+end
+availPorts = {};
 allPorts   = {};
 
 % Disable output of IOPort during probe-run:
@@ -16,16 +25,16 @@ oldverbosity = IOPort('Verbosity', 0);
 % Test each port for existence:
 for i = 1:numel(ports)
     % Try to open:
-    [h, errmsg] = IOPort('OpenSerialPort', ports{i},'BaudRate=115200,DTR=1,RTS=1');
-    
+    [h, errmsg] = IOPort('OpenSerialPort', [prefix ports{i}],'BaudRate=115200,DTR=1,RTS=1');
+
     % Open succeeded?
     if h >= 0
         % Yes, this is an existing and available port. Close it again:
-        IOPort('Close', h);        
+        IOPort('Close', h);
         % Add to list of available and all ports:
         availPorts{end+1} = ports{i}; %#ok<AGROW>
         allPorts{end+1}   = ports{i}; %#ok<AGROW>
-    elseif isempty(strfind(errmsg, 'ENOENT'))
+    elseif (any(strfind(errmsg, 'already open')) && IsLinux) || (any(strfind(errmsg, 'grant access')) && IsWin)
         % Failed to open port, because it is busy, but port exists. Add
         % to only to list of all ports:
         allPorts{end+1} = ports{i}; %#ok<AGROW>
@@ -36,9 +45,9 @@ IOPort('Verbosity', oldverbosity);
 
 switch upper(cmd)
     case'ALL'
-    ports = allPorts;
+    out = allPorts;
     case {'AVAILABLE','AVAIL'}
-    ports = availPorts;    
+    out = availPorts;
     otherwise
     error(sprintf('%s not supported: use ''all'' or ''available'' \n',cmd));
-end    
+end
